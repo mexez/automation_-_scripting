@@ -1,1 +1,344 @@
 
+### Sync Meraki VPN users into an M365/Entra group (VPNUsers) for centralized access management.
+##
+This process automates:
+Retrieving VPN users from a Cisco Meraki organization
+Exporting users to CSV
+Transforming the CSV into the required format for Microsoft Entra Admin Center
+Bulk importing users into an Entra security group
+##
+
+
+#####
+
+
+# Phase 1 – Extract VPN Users from Meraki
+
+---
+
+## 1. Set API Headers
+
+```powershell
+# ================================
+# Meraki API Configuration
+# ================================
+
+$apiKey = "YOUR_MERAKI_API_KEY"   # Replace securely (Do NOT hardcode in production)
+
+$headers = @{
+    "X-Cisco-Meraki-API-Key" = $apiKey
+    "Content-Type"           = "application/json"
+}
+```
+
+---
+
+## 2 Get Organization ID
+
+```powershell
+# ================================
+# Get Organizations
+# ================================
+
+$organizations = Invoke-RestMethod `
+    -Uri "https://api.meraki.com/api/v1/organizations" `
+    -Headers $headers `
+    -Method Get
+
+$organizations | Format-Table id, name
+```
+
+> Example: 5414402
+
+---
+
+## 3️ List Networks in the Organization
+
+```powershell
+# ================================
+# Get Networks in Organization
+# ================================
+
+$orgId = "1514402"   # Replace with your Org ID
+
+$networks = Invoke-RestMethod `
+    -Uri "https://api.meraki.com/api/v1/organizations/$orgId/networks" `
+    -Headers $headers `
+    -Method Get
+
+$networks | Format-Table id, name
+```
+
+> Example Network:
+
+```
+L_907515993762491702 → xxx HQ
+```
+
+---
+
+## 4️ Retrieve VPN Users (Meraki Auth Users)
+
+```powershell
+# ================================
+# Get VPN Users from Network
+# ================================
+
+$networkId = "L_686235993220599702"   # Replace with target network ID
+
+$vpnUsers = Invoke-RestMethod `
+    -Uri "https://api.meraki.com/api/v1/networks/$networkId/merakiAuthUsers" `
+    -Headers $headers `
+    -Method Get
+
+$vpnUsers | Format-Table id, name, email
+```
+
+---
+
+## 5️ Export VPN Users to CSV
+
+```powershell
+# ================================
+# Export VPN Users to CSV
+# ================================
+
+$exportPath = "C:\Temp\VPNUsers_GlobalXCanadaHQ.csv"
+
+$vpnUsers |
+    Select-Object id, name, email |
+    Export-Csv -Path $exportPath -NoTypeInformation -Encoding UTF8
+
+Write-Host "VPN users exported to $exportPath"
+```
+
+Output CSV format:
+
+```
+id,name,email
+123,John Doe,john@domain.com
+```
+
+---
+
+# Phase 2 – Transform CSV for Microsoft Entra Bulk Upload
+
+Microsoft Entra requires a very specific CSV structure for bulk group imports.
+
+---
+
+## Required Format
+
+```
+# VERSION 1.0
+Member object ID or user principal name [memberObjectIdOrUpn] Required
+user@domain.com
+```
+
+---
+
+## Transform Script
+
+```powershell
+# ================================
+# Transform CSV for Entra Group Import
+# ================================
+
+# Source file from Phase 1
+$source = "C:\Temp\VPNUsers_GlobalXCanadaHQ.csv"
+
+# Output file for Entra
+$output = "C:\Temp\GlobalXM365Group_VPNUsers_GlobalXCanadaHQ.csv"
+
+# Import original CSV
+$rows = Import-Csv -Path $source
+
+# Build required content
+$lines = @()
+$lines += "# VERSION 1.0"
+$lines += "Member object ID or user principal name [memberObjectIdOrUpn] Required"
+
+foreach ($r in $rows) {
+    $lines += $r.email   # Email column is treated as UPN
+}
+
+# Save file exactly as required
+$lines | Set-Content -Encoding UTF8 -Path $output
+
+Write-Host "Transformation complete."
+Write-Host "Upload this file to Entra Admin Center:"
+Write-Host $output
+```
+
+---
+
+# Phase 3 – Import into Microsoft Entra Group
+
+1. Sign in to Entra Admin Center
+2. Go to **Groups**
+3. Select your group (e.g., VPNUsers)
+4. Navigate to **Members**
+5. Select **Bulk operations → Import members**
+6. Upload the transformed CSV
+7. Confirm import
+
+---
+
+# Full End-to-End Script (Optional Combined Version)
+
+This version performs export + transform in one execution:
+
+```powershell
+# ================================
+# FULL AUTOMATION SCRIPT
+# ================================
+
+$apiKey   = "YOUR_MERAKI_API_KEY"
+$orgId    = "1514402"
+$networkId = "L_686235993220599702"
+
+$headers = @{
+    "X-Cisco-Meraki-API-Key" = $apiKey
+    "Content-Type"           = "application/json"
+}
+
+# Get VPN Users
+$vpnUsers = Invoke-RestMethod `
+    -Uri "https://api.meraki.com/api/v1/networks/$networkId/merakiAuthUsers" `
+    -Headers $headers `
+    -Method Get
+
+# Export Raw CSV
+$rawExport = "C:\Temp\VPNUsers_Raw.csv"
+$vpnUsers | Select-Object id, name, email |
+    Export-Csv -Path $rawExport -NoTypeInformation -Encoding UTF8
+
+# Transform for Entra
+$finalExport = "C:\Temp\VPNUsers_EntraImport.csv"
+
+$lines = @()
+$lines += "# VERSION 1.0"
+$lines += "Member object ID or user principal name [memberObjectIdOrUpn] Required"
+
+foreach ($user in $vpnUsers) {
+    $lines += $user.email
+}
+
+$lines | Set-Content -Encoding UTF8 -Path $finalExport
+
+Write-Host "Process complete."
+Write-Host "Raw Export: $rawExport"
+Write-Host "Entra Import File: $finalExport"
+```
+
+---
+
+# Recommended Improvements (Production Ready)
+
+* Store API key in:
+
+  * Azure Key Vault
+  * Windows Credential Manager
+  * Environment variable
+* Add:
+
+  * Error handling (Try/Catch)
+  * Logging
+  * Validation of empty results
+  * Scheduled task automation
+
+---
+
+
+
+
+######## SUMMARY
+
+
+
+##### Phase 1
+
+## 1. Identify the Organization ID   (This pulls the Org ID)
+
+$headers = @{
+    "X-Cisco-Meraki-API-Key" = "0397d47de0f9bXXXXXXXXXXXed1662945cf1099a"
+    "Content-Type" = "application/json"
+}
+
+Invoke-RestMethod -Uri "https://api.meraki.com/api/v1/organizations" -Headers $headers
+
+
+##GlobalX ID: 1849702
+
+
+## 2 List the Network in the Org
+
+$orgId = 1514402  # replace with your org ID
+$networks = Invoke-RestMethod -Uri "https://api.meraki.com/api/v1/organizations/$orgId/networks" -Headers $headers
+
+
+## 3 Call the Meraki API for Org ID $orgId to get the networks
+
+$orgId = 1514402
+$networks = Invoke-RestMethod -Uri "https://api.meraki.com/api/v1/organizations/$orgId/networks" -Headers $headers
+$networks | Format-Table id, name
+
+
+
+## 4 pull all VPN users (for L_686230000000009702 → xxxx HQ)
+
+# Your API key header
+$headers = @{
+    "X-Cisco-Meraki-API-Key" = "yyyyyyyde0f9b03e9fcxxxxxxx1662945cf1099a"
+    "Content-Type" = "application/json"
+}
+
+# Network ID for Global X Canada HQ
+$networkId = "L_6862359xxxxxxxxx02"
+
+# Get VPN users
+$vpnUsers = Invoke-RestMethod -Uri "https://api.meraki.com/api/v1/networks/$networkId/merakiAuthUsers" -Headers $headers
+
+# Display in a table
+$vpnUsers | Format-Table id, name, email
+
+
+## Export VPN users to a CSV 
+
+$vpnUsers | Select-Object id, name, email | Export-Csv -Path "VPNUsers_GlobalXCanadaHQ.csv" -NoTypeInformation
+
+
+
+
+### Phase 2:  Transorm the csv for Bulk upload to Microsoft Entra Admin centre Group (VPNUsers) created
+
+##Upload the csv to the m365 VPNUser Group (Import as a bulk file)
+
+# Path to your original CSV with header: id,name,email
+$source = "C:\Users\EmmanuelEzeali\VPNUsers_GlobalXCanadaHQi.csv"
+
+# Output file for the portal
+$output = "C:\Users\EmmanuelEzeali\GlobalXM365Group_VPNUsers_GlobalXCanadaHQi.csv"
+
+# Read your users
+$rows = Import-Csv -Path $source
+
+# Build the portal-required content
+$lines = @()
+$lines += "# VERSION 1.0"
+$lines += "Member object ID or user principal name [memberObjectIdOrUpn] Required"
+
+foreach ($r in $rows) {
+    $lines += $r.email   # <-- Your 'email' column = UPN.
+}
+
+# Save CSV exactly how portal wants it
+$lines | Set-Content -Encoding UTF8 -Path $output
+
+Write-Host "DONE! Upload this in the portal: $output"
+
+
+#####FInally, import the output file to teh Group
+
+
+* ✅ A README.md optimized for GitHub with badges and structure
